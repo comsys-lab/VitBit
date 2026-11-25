@@ -13,7 +13,7 @@ The repository implements ViT-Base (INT8) five ways and measures the end-to-end 
 
 ### Splitting the work across Tensor, INT and FP cores
 
-<p align="center"><img src="figures/fig2_overview.jpg" alt="Conceptual overview of VitBit" width="800"></p>
+<p align="center"><img src="figures/fig2_overview.png" alt="Conceptual overview of VitBit" width="800"></p>
 <p align="center"><em>Conceptual overview of VitBit (Fig. 2 in the paper). Top: preprocessing on the CPU. Bottom: computation on the GPU.</em></p>
 
 On the CPU, before inference (paper Algorithm 1), the input matrix of each Linear layer is split by column:
