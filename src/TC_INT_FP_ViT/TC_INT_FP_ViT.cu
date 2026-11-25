@@ -1,3 +1,15 @@
+/*
+ * TC_INT_FP_ViT.cu - ViT-Base inference, TC+IC+FC.
+ *
+ * Linear layers: TC_WIDTH columns on Tensor cores; the CUDA-core part (CC_WIDTH)
+ * is split in half between INT and FP CUDA cores (688 + 48 + 48 = 784).
+ * Other kernels also split their work between INT and FP CUDA cores.
+ *
+ * Timed region: patch embedding (Linear 3) followed by 12 encoder blocks
+ * (LayerNorm, QKV Linear, Softmax, Dropout, projection Linear, LayerNorm,
+ * MLP Linear + GELU + Linear). Weights and inputs are random INT8-range values,
+ * because only the execution time is measured. Prints "Inference Time: <ms>".
+ */
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -38,7 +50,7 @@ void initializeRandom_int(int* array, int size) {
 
 void initializeRandom_float(float* array, int size) {
     for (int i = 0; i < size; ++i) {
-        array[i] = static_cast<float>(rand()) / RAND_MAX; // 0부터 1까지의 랜덤값
+        array[i] = static_cast<float>(rand()) / RAND_MAX; // random value in [0, 1]
     }
 }
 

@@ -1,3 +1,14 @@
+/*
+ * TC_INT_ViT.cu - ViT-Base inference, Tacker-style simultaneous execution (TC+IC).
+ *
+ * Linear layers: TC_WIDTH columns on Tensor cores, CC_WIDTH columns on INT CUDA
+ * cores, in one fused kernel (TC_WIDTH + CC_WIDTH = 784).
+ *
+ * Timed region: patch embedding (Linear 3) followed by 12 encoder blocks
+ * (LayerNorm, QKV Linear, Softmax, Dropout, projection Linear, LayerNorm,
+ * MLP Linear + GELU + Linear). Weights and inputs are random INT8-range values,
+ * because only the execution time is measured. Prints "Inference Time: <ms>".
+ */
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -37,7 +48,7 @@ void initializeRandom_int(int* array, int size) {
 
 void initializeRandom_float(float* array, int size) {
     for (int i = 0; i < size; ++i) {
-        array[i] = static_cast<float>(rand()) / RAND_MAX; // 0부터 1까지의 랜덤값
+        array[i] = static_cast<float>(rand()) / RAND_MAX; // random value in [0, 1]
     }
 }
 

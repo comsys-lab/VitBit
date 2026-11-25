@@ -1,3 +1,20 @@
+/*
+ * gemm_kernels.cuh - GEMM device functions shared by all five ViT-Base variants.
+ *
+ * Each *_Linear kernel is a fused kernel: inside one thread block, the warps in
+ * the first row (threadIdx.y == 0) run TC_gemm_kernel on the Tensor cores, and the
+ * other warps run one of the CUDA-core GEMMs below on their part of the matrix.
+ * Because different warps of the same block use different units, the warp
+ * scheduler issues Tensor-core and CUDA-core instructions at the same time.
+ *
+ *   TC_gemm_kernel        : INT8 GEMM with WMMA (Tensor cores)
+ *   CC_INT_gemm_kernel    : INT32 GEMM on INT CUDA cores           (Tacker)
+ *   CC_FP_gemm_kernel     : FP32 GEMM on FP CUDA cores             (TC+FC)
+ *   CC_INT_FP_gemm_kernel : even warps INT, odd warps FP           (TC+IC+FC)
+ *   CC_VitBit_gemm_kernel : same split, but the INT operands are packed
+ *                           (2 INT8 values per 32-bit word), so one INT
+ *                           multiply-add computes two products   (VitBit)
+ */
 #pragma once
 #include <cuda.h>
 #include <cuda/barrier>
@@ -18,6 +35,7 @@ namespace cg = cooperative_groups;
 constexpr bool GEMM_OP_T = true;
 constexpr bool GEMM_OP_N = false;
 
+// INT8 GEMM C = A x B on Tensor cores (WMMA 16x16x16), with a 2-stage shared-memory pipeline.
 __device__ void TC_gemm_kernel(const int8_t* A, const int8_t* B, int8_t* C, 
                             int M, int N, int K) {
     constexpr int TC_SIZE = 16;
@@ -174,6 +192,7 @@ __device__ void TC_gemm_kernel(const int8_t* A, const int8_t* B, int8_t* C,
 }
 
 
+// Tiled INT32 GEMM on INT CUDA cores.
 __device__ void CC_INT_gemm_kernel(const int* CC_input_int, const int* CC_weight_int, int* CC_output_int, 
                                int CC_M, int CC_N, int CC_K) {
 
@@ -198,6 +217,7 @@ __device__ void CC_INT_gemm_kernel(const int* CC_input_int, const int* CC_weight
     }
 }
 
+// Tiled FP32 GEMM on FP CUDA cores (inputs converted from INT to float).
 __device__ void CC_FP_gemm_kernel(const float* CC_input_fp, const float* CC_weight_fp, float* CC_output_fp, 
                                int CC_M, int CC_N, int CC_K) {
 
@@ -222,6 +242,7 @@ __device__ void CC_FP_gemm_kernel(const float* CC_input_fp, const float* CC_weig
     }
 }
 
+// Simultaneous INT and FP CUDA cores: warps alternate between the INT part and the FP part.
 __device__ void CC_INT_FP_gemm_kernel(const int* CC_input_int, const int* CC_weight_int, int* CC_output_int,
                                     const float* CC_input_fp, const float* CC_weight_fp, float* CC_output_fp, 
                                     int CC_M, int CC_N_half, int CC_K) {
@@ -238,7 +259,7 @@ __device__ void CC_INT_FP_gemm_kernel(const int* CC_input_int, const int* CC_wei
     int Row = by * blockDim.y + ty;
     int Col = (bx < CC_N_half/TILE_WIDTH1) ? (bx * blockDim.x + tx) : ((bx - CC_N_half/TILE_WIDTH1) * blockDim.x + tx);
    
-    if ((tid / warpSize) % 2 == 0) {
+    if ((tid / warpSize) % 2 == 0) {     // even warps: INT CUDA cores, odd warps: FP CUDA cores
         for (int i = 0; i < CC_N_half / TILE_WIDTH1; ++i) {
             input_int_shared[threadIdx.y][threadIdx.x] = CC_input_int[(i * TILE_WIDTH2 + ty) * CC_N_half + Col];
             weight_int_shared[threadIdx.y][threadIdx.x] = CC_weight_int[Row * CC_N_half + (i * TILE_WIDTH1 + tx)];
@@ -264,6 +285,9 @@ __device__ void CC_INT_FP_gemm_kernel(const int* CC_input_int, const int* CC_wei
     }
 }
 
+// VitBit CUDA-core GEMM: like CC_INT_FP_gemm_kernel, but the INT part holds packed
+// operands (paper Fig. 4). Each 32-bit word carries two INT8 values with zero padding,
+// so one integer multiply-add yields two products without overflowing into each other.
 __device__ void CC_VitBit_gemm_kernel(const int* CC_input_int, const int* CC_weight_int, int* CC_output_int,
                                     const float* CC_input_fp, const float* CC_weight_fp, float* CC_output_fp, 
                                     int CC_M, int CC_N_VB, int CC_K) {
@@ -280,7 +304,7 @@ __device__ void CC_VitBit_gemm_kernel(const int* CC_input_int, const int* CC_wei
     int Row = by * blockDim.y + ty;
     int Col = (bx < CC_N_VB/TILE_WIDTH1) ? (bx * blockDim.x + tx) : ((bx - CC_N_VB/TILE_WIDTH1) * blockDim.x + tx);
    
-    if ((tid / warpSize) % 2 == 0) {
+    if ((tid / warpSize) % 2 == 0) {     // even warps: INT CUDA cores, odd warps: FP CUDA cores
         for (int i = 0; i < CC_N_VB / TILE_WIDTH1; ++i) {
             input_int_shared[threadIdx.y][threadIdx.x] = CC_input_int[(i * TILE_WIDTH2 + ty) * CC_N_VB + Col];
             weight_int_shared[threadIdx.y][threadIdx.x] = CC_weight_int[Row * CC_N_VB + (i * TILE_WIDTH1 + tx)];

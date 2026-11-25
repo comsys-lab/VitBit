@@ -1,4 +1,9 @@
-#include "Gemm_kernels.cuh"
+/*
+ * Linear layer for VitBit (paper Algorithm 2): Tensor cores, INT CUDA cores (with
+ * packed INT8 operands) and FP CUDA cores run concurrently in one fused kernel.
+ * Warps with threadIdx.y == 0 use Tensor cores; the remaining warps use CUDA cores.
+ */
+#include "../common/gemm_kernels.cuh"
 
 #define TILE_WIDTH1 32
 #define TILE_WIDTH2 24
@@ -10,7 +15,7 @@ __global__ void VitBit_Linear(const int8_t* TC_input, const int8_t* TC_weight, i
 
     int bid = blockIdx.x * gridDim.x + blockIdx.y;
 
-    if((threadIdx.y < 1)) {
+    if((threadIdx.y < 1)) {                 // first warp row: Tensor cores
         TC_gemm_kernel(TC_input, TC_weight, TC_output, TC_M, TC_N, TC_K);
     }              
     else if(bid < ((CC_N_half/TILE_WIDTH2)*(CC_M/TILE_WIDTH1))) {

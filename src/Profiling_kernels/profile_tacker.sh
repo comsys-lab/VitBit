@@ -1,7 +1,0 @@
-#!/bin/bash
-
-VITBIT_EXECUTABLE="../TC_INT_ViT/TC_INT_ViT"
-
-PROFILING_RESULT="./profile_TC_INT_ViT"
-
-ncu -o $PROFILING_RESULT --set full $VITBIT_EXECUTABLE

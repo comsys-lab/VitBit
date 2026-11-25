@@ -1,3 +1,18 @@
+/*
+ * VitBit.cu - ViT-Base inference, VitBit.
+ *
+ * Same as TC+IC+FC, plus register operand packing: the INT CUDA-core part holds
+ * PACKING_NUM (2) INT8 values per 32-bit word, so it covers twice as many columns
+ * per instruction. The split follows the paper (Sec. 3.1-3.2):
+ *   Tensor cores : CUDA cores = 4 : 1    -> TC_WIDTH = 624 of ORIGINAL_WIDTH = 784
+ *   packed INT : FP = n : 1 with n = 2   -> CC_WIDTH = 108 INT values (54 packed words)
+ *                                          and CC_WIDTH_HALF = 54 FP values
+ *
+ * Timed region: patch embedding (Linear 3) followed by 12 encoder blocks
+ * (LayerNorm, QKV Linear, Softmax, Dropout, projection Linear, LayerNorm,
+ * MLP Linear + GELU + Linear). Weights and inputs are random INT8-range values,
+ * because only the execution time is measured. Prints "Inference Time: <ms>".
+ */
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -12,6 +27,8 @@
 #include <cuda_runtime_api.h>
 #include <cuda.h>
 #include <mma.h>
+#include <bitset>
+using std::bitset;
 
 #include "VitBit_Functions.cuh"
 
@@ -40,7 +57,7 @@ void initializeRandom_int(int* array, int size) {
 
 void initializeRandom_float(float* array, int size) {
     for (int i = 0; i < size; ++i) {
-        array[i] = static_cast<float>(rand()) / RAND_MAX; // 0부터 1까지의 랜덤값
+        array[i] = static_cast<float>(rand()) / RAND_MAX; // random value in [0, 1]
     }
 }
 
@@ -74,6 +91,13 @@ void rearrange_int(int *input, int *output, int output_rows, int output_cols) {
     }
 }
 
+/* Register operand packing (paper Fig. 3, Algorithm 1).
+ * Packs num_packing integers into one 32-bit word, each value followed by an
+ * equally wide zero gap that holds the high bits of the product:
+ *   num_packing = 2 : 8-bit values at bits 16 and 0
+ *   num_packing = 3 : 5-bit values at bits 20, 10 and 0
+ *   num_packing = 4 : 4-bit values at bits 24, 16, 8 and 0
+ * packed_size is the number of output words. */
 void pack_integer_values(int *matrix, int *packed_matirx, int num_packing, int packed_size){
 
     if(num_packing == 2){
@@ -137,21 +161,11 @@ int main(){
     float *Rearrange_CC_input_fp = new float[224 * 224 * 3 * CC_WIDTH_HALF / (TC_WIDTH + CC_WIDTH_HALF)];
     initializeRandom_float(Rearrange_CC_input_fp, 224 * 224 * 3 * CC_WIDTH_HALF / (TC_WIDTH + CC_WIDTH_HALF));
 
-    /* Measuring Preprocessng Time*/
-    // clock_t Pre_Processing_Start, Pre_Processing_End;
-    // double Pre_Processing_Time;
-
-    // Pre_Processing_Start = clock();
-
-    ///
-    int *Input_INT_Packed_Part = new int[WIDTH * 192];;
-    pack_integer_values(Input_INT_part, Input_INT_Packed_Part, NUM_PACKING, (WIDTH * 192));
-    float *Input_FP_part_GPU;
-    cudaMalloc(&Input_INT_Packed_Part, (WIDTH * 192) * sizeof(int));
-    cudaMemcpy(Input_INT_Packed_Part, Input_INT_part, (WIDTH * 192) * sizeof(int), cudaMemcpyHostToDevice);
-    cudaMalloc(&Input_FP_part_GPU, (WIDTH * 192) * sizeof(float));
-    cudaMemcpy(Input_FP_part_GPU, Input_FP_part, (WIDTH * 192) * sizeof(float), cudaMemcpyHostToDevice);
-    ///
+    /* VitBit preprocessing (paper Sec. 3.2, Algorithm 1): the part of the input
+       processed by INT CUDA cores holds PACKING_NUM INT8 values per 32-bit word. */
+    int *Rearrange_CC_input_int_unpacked = new int[CC_WIDTH_HALF * 192 * PACKING_NUM];
+    initializeRandom_int(Rearrange_CC_input_int_unpacked, CC_WIDTH_HALF * 192 * PACKING_NUM);
+    pack_integer_values(Rearrange_CC_input_int_unpacked, Rearrange_CC_input_int, PACKING_NUM, CC_WIDTH_HALF * 192);
     
     int8_t *Rearrange1_TC_output_GPU;
     cudaMalloc(&Rearrange1_TC_output_GPU, (TC_WIDTH*192) * sizeof(int8_t));

@@ -1,3 +1,15 @@
+/*
+ * TC_ViT.cu - ViT-Base inference, TC (baseline).
+ *
+ * GEMMs (Linear layers) run on Tensor cores only. Other kernels (Softmax, GELU,
+ * Dropout, LayerNorm, Add) run on INT CUDA cores.
+ * WIDTH: width of the input matrix of each Linear layer.
+ *
+ * Timed region: patch embedding (Linear 3) followed by 12 encoder blocks
+ * (LayerNorm, QKV Linear, Softmax, Dropout, projection Linear, LayerNorm,
+ * MLP Linear + GELU + Linear). Weights and inputs are random INT8-range values,
+ * because only the execution time is measured. Prints "Inference Time: <ms>".
+ */
 #include <stdlib.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -29,7 +41,7 @@ void initializeRandom_int8(int8_t* array, int size) {
 
 void initializeRandom_float(float* array, int size) {
     for (int i = 0; i < size; ++i) {
-        array[i] = static_cast<float>(rand()) / RAND_MAX; // 0부터 1까지의 랜덤값
+        array[i] = static_cast<float>(rand()) / RAND_MAX; // random value in [0, 1]
     }
 }
 
